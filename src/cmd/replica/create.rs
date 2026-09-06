@@ -6,6 +6,7 @@
 use crate::cmd::replica::make_prefix_arg;
 use crate::cmd::RESOURCE_PATH_HELP;
 use crate::io::reduct::{build_client, parse_url_and_token};
+use crate::io::std::output;
 use crate::parse::widely_used_args::{make_compression_arg, make_entries_arg, make_when_arg};
 use crate::parse::{Resource, ResourcePathParser};
 use clap::{Arg, Command};
@@ -86,13 +87,20 @@ pub(super) async fn create_replica(
         .set_settings(settings)
         .send()
         .await?;
+    if ctx.json() {
+        output!(ctx, "{}", "{}");
+    }
+
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::context::tests::{bucket, bucket2, context, replica};
+    use crate::context::{
+        tests::{bucket, bucket2, context, replica, MockOutput},
+        ContextBuilder,
+    };
 
     use rstest::rstest;
     use serde_json::json;
@@ -256,5 +264,47 @@ mod tests {
         assert!(args.is_err());
         let err = args.unwrap_err();
         assert!(err.to_string().contains("invalid compression method"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_create_replica_json(
+        context: crate::context::CliContext,
+        #[future] replica: String,
+        #[future] bucket: String,
+        #[future] bucket2: String,
+    ) {
+        let test_replica = replica.await;
+        let bucket = bucket.await;
+        let bucket2 = bucket2.await;
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let client = build_client(&ctx, "local").await.unwrap();
+        client.create_bucket(&bucket).send().await.unwrap();
+        client.create_bucket(&bucket2).send().await.unwrap();
+
+        let args = create_replica_cmd().get_matches_from(vec![
+            "create",
+            format!("local/{}", test_replica).as_str(),
+            &bucket,
+            format!("local/{}", bucket2).as_str(),
+            "--entries",
+            "entry1",
+            "entry2",
+            "--prefix",
+            "robot-1",
+            "--when",
+            r#"{"&label": {"$gt": 10}}"#,
+            "--compression",
+            "gzip",
+        ]);
+
+        create_replica(&ctx, &args).await.unwrap();
+        assert_eq!(ctx.stdout().history(), vec!["{}"]);
     }
 }
