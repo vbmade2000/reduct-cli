@@ -72,17 +72,29 @@ pub(super) async fn ls_replica(
     let client = crate::io::reduct::build_client(_ctx, alias_or_url).await?;
 
     let print_list = |ctx: &crate::context::CliContext, replication_list: Vec<ReplicationInfo>| {
-        for replication in replication_list {
-            output!(ctx, "{}", replication.name);
+        if ctx.json() {
+            let replications = replication_list
+                .iter()
+                .map(|r| r.name.as_str())
+                .collect::<Vec<_>>();
+            output!(ctx, "{}", serde_json::to_string(&replications).unwrap());
+        } else {
+            for replication in replication_list {
+                output!(ctx, "{}", replication.name);
+            }
         }
     };
 
     let print_full_list = |ctx: &crate::context::CliContext,
                            replication_list: Vec<ReplicationInfo>| {
-        let table = Table::new(replication_list.into_iter().map(ReplicationTable::from))
-            .with(Style::markdown())
-            .to_string();
-        output!(ctx, "{}", table);
+        if ctx.json() {
+            output!(ctx, "{}", serde_json::to_string(&replication_list).unwrap());
+        } else {
+            let table = Table::new(replication_list.into_iter().map(ReplicationTable::from))
+                .with(Style::markdown())
+                .to_string();
+            output!(ctx, "{}", table);
+        }
     };
 
     if args.get_flag("full") {
@@ -98,10 +110,10 @@ pub(super) async fn ls_replica(
 mod tests {
     use super::*;
 
-    use crate::context::tests::{bucket, bucket2, context, replica};
+    use crate::context::tests::{bucket, bucket2, context, replica, MockOutput};
 
     use crate::cmd::replica::tests::prepare_replication;
-    use crate::context::CliContext;
+    use crate::context::{CliContext, ContextBuilder};
 
     use rstest::rstest;
 
@@ -162,5 +174,76 @@ mod tests {
             .with(Style::markdown())
             .to_string()]
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_list_replications_json(
+        context: CliContext,
+        #[future] replica: String,
+        #[future] bucket: String,
+        #[future] bucket2: String,
+    ) {
+        let replica = replica.await;
+        let bucket = bucket.await;
+        let bucket2 = bucket2.await;
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_replication(&ctx, &replica, &bucket, &bucket2)
+            .await
+            .unwrap();
+
+        let args = ls_replica_cmd()
+            .try_get_matches_from(vec!["ls", "local"])
+            .unwrap();
+
+        ls_replica(&ctx, &args).await.unwrap();
+
+        let history = &ctx.stdout().history()[0];
+        let replications: Vec<String> = serde_json::from_str(history).unwrap();
+        assert_eq!(replications.contains(&"test_replica".to_string()), true);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_list_replications_json_full(
+        context: CliContext,
+        #[future] replica: String,
+        #[future] bucket: String,
+        #[future] bucket2: String,
+    ) {
+        let replica = replica.await;
+        let bucket = bucket.await;
+        let bucket2 = bucket2.await;
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_replication(&ctx, &replica, &bucket, &bucket2)
+            .await
+            .unwrap();
+
+        let args = ls_replica_cmd()
+            .try_get_matches_from(vec!["ls", "local", "-f"])
+            .unwrap();
+
+        ls_replica(&ctx, &args).await.unwrap();
+
+        let history = &ctx.stdout().history()[0];
+
+        let replications: Vec<serde_json::Value> = serde_json::from_str(history).unwrap();
+        assert_eq!(replications[0]["name"], serde_json::json!("test_replica"));
+        assert_eq!(replications[0]["mode"], serde_json::json!("enabled"));
+        assert_eq!(replications[0]["is_active"], serde_json::json!(true));
+        assert_eq!(replications[0]["is_provisioned"], serde_json::json!(false));
+        assert_eq!(replications[0]["pending_records"], serde_json::json!(0));
     }
 }
