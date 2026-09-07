@@ -24,8 +24,13 @@ pub(super) async fn ls_attachment(ctx: &CliContext, args: &ArgMatches) -> anyhow
 
     let mut keys = attachments.keys().cloned().collect::<Vec<String>>();
     keys.sort();
-    for key in keys {
-        output!(ctx, "{}", key);
+
+    if ctx.json() {
+        output!(ctx, "{}", serde_json::to_string(&keys)?);
+    } else {
+        for key in keys {
+            output!(ctx, "{}", key);
+        }
     }
 
     Ok(())
@@ -35,7 +40,8 @@ pub(super) async fn ls_attachment(ctx: &CliContext, args: &ArgMatches) -> anyhow
 mod tests {
     use super::*;
     use crate::cmd::attachment::helpers::test_utils::{create_bucket, remove_bucket};
-    use crate::context::tests::context;
+    use crate::context::tests::{context, MockOutput};
+    use crate::context::ContextBuilder;
     use rstest::rstest;
     use serde_json::json;
     use std::collections::HashMap;
@@ -87,5 +93,36 @@ mod tests {
         remove_bucket(&context, &bucket_name).await.unwrap();
 
         assert!(context.stdout().history().is_empty());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_ls_attachments_json(context: CliContext) {
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let (bucket_name, bucket) = create_bucket(&ctx, "test-attachment-ls").await.unwrap();
+        bucket
+            .write_attachments(
+                "entry-1",
+                HashMap::from([
+                    ("schema".to_string(), json!({"type":"object"})),
+                    ("prompt".to_string(), json!({"role":"system"})),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let args = ls_attachment_cmd()
+            .try_get_matches_from(vec!["ls", &format!("local/{}/entry-1", bucket_name)])
+            .unwrap();
+        ls_attachment(&ctx, &args).await.unwrap();
+
+        let attachments: Vec<String> = serde_json::from_str(&ctx.stdout().history()[0]).unwrap();
+        assert!(attachments.contains(&"schema".to_string()));
+        assert!(attachments.contains(&"prompt".to_string()));
     }
 }
