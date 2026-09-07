@@ -36,6 +36,7 @@ pub(super) async fn rm_replica_handler(ctx: &CliContext, args: &ArgMatches) -> a
         .unwrap()
         .clone()
         .pair()?;
+    let is_json = ctx.json();
 
     let confirm = if !args.get_flag("yes") {
         let confirm = dialoguer::Confirm::new()
@@ -53,9 +54,17 @@ pub(super) async fn rm_replica_handler(ctx: &CliContext, args: &ArgMatches) -> a
     if confirm {
         let client = build_client(ctx, &alias_or_url).await?;
         client.delete_replication(&replication_name).await?;
-        output!(ctx, "Replication '{}' deleted", replication_name);
+        if is_json {
+            output!(ctx, "{}", "{}");
+        } else {
+            output!(ctx, "Replication '{}' deleted", replication_name);
+        }
     } else {
-        output!(ctx, "Replication '{}' not deleted", replication_name);
+        if is_json {
+            output!(ctx, "{}", "{}");
+        } else {
+            output!(ctx, "Replication '{}' not deleted", replication_name);
+        }
     }
 
     Ok(())
@@ -65,8 +74,8 @@ pub(super) async fn rm_replica_handler(ctx: &CliContext, args: &ArgMatches) -> a
 mod tests {
     use crate::cmd::replica::rm::{rm_replica_cmd, rm_replica_handler};
     use crate::cmd::replica::tests::prepare_replication;
-    use crate::context::tests::{bucket, bucket2, context, replica};
-    use crate::context::CliContext;
+    use crate::context::tests::{bucket, bucket2, context, replica, MockOutput};
+    use crate::context::{CliContext, ContextBuilder};
     use rstest::rstest;
 
     #[rstest]
@@ -99,5 +108,35 @@ mod tests {
                 .to_string(),
             "[NotFound] Replication 'test_replica' does not exist"
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_rm_replica_json(
+        context: CliContext,
+        #[future] replica: String,
+        #[future] bucket: String,
+        #[future] bucket2: String,
+    ) {
+        let replica = replica.await;
+        let bucket = bucket.await;
+        let bucket2 = bucket2.await;
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_replication(&ctx, &replica, &bucket, &bucket2)
+            .await
+            .unwrap();
+
+        let args = rm_replica_cmd()
+            .try_get_matches_from(vec!["rm", format!("local/{}", replica).as_str(), "--yes"])
+            .unwrap();
+        rm_replica_handler(&ctx, &args).await.unwrap();
+
+        assert_eq!(ctx.stdout().history(), vec!["{}"]);
     }
 }
