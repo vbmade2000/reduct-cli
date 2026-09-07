@@ -43,10 +43,16 @@ pub(super) async fn write_attachment(ctx: &CliContext, args: &ArgMatches) -> any
 
     let mut attachments = HashMap::new();
     attachments.insert(key.clone(), json);
+    let attchments_json = attachments.clone();
 
     let client = build_client(ctx, &path.alias_or_url).await?;
     let bucket = client.get_bucket(&path.bucket).await?;
     bucket.write_attachments(&path.entry, attachments).await?;
+
+    if ctx.json() {
+        output!(ctx, "{}", serde_json::to_string(&attchments_json)?);
+        return Ok(());
+    }
 
     output!(
         ctx,
@@ -64,7 +70,8 @@ pub(super) async fn write_attachment(ctx: &CliContext, args: &ArgMatches) -> any
 mod tests {
     use super::*;
     use crate::cmd::attachment::helpers::test_utils::{create_bucket, remove_bucket};
-    use crate::context::tests::context;
+    use crate::context::tests::{context, MockOutput};
+    use crate::context::ContextBuilder;
     use rstest::rstest;
     use serde_json::json;
 
@@ -139,5 +146,33 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Failed to parse attachment value for key 'schema'"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_write_attachment_json(context: CliContext) {
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let (bucket_name, _bucket) = create_bucket(&ctx, "test-attachment-write").await.unwrap();
+        let args = write_attachment_cmd()
+            .try_get_matches_from(vec![
+                "write",
+                &format!("local/{}/entry-1", bucket_name),
+                "schema",
+                "{\"type\":\"object\"}",
+            ])
+            .unwrap();
+
+        write_attachment(&ctx, &args).await.unwrap();
+        remove_bucket(&ctx, &bucket_name).await.unwrap();
+
+        let attachments: serde_json::Value =
+            serde_json::from_str(&ctx.stdout().history()[0]).unwrap();
+
+        assert_eq!(attachments["schema"]["type"], serde_json::json!("object"));
     }
 }
