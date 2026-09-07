@@ -3,6 +3,8 @@
 //    License, v. 2.0. If a copy of the MPL was not distributed with this
 //    file, You can obtain one at https://mozilla.org/MPL/2.0/.
 
+use std::collections::HashMap;
+
 use crate::cmd::attachment::helpers::{entry_path_arg, read_attachments_or_empty, EntryPath};
 use crate::context::CliContext;
 use crate::io::reduct::build_client;
@@ -32,28 +34,43 @@ pub(super) async fn read_attachment(ctx: &CliContext, args: &ArgMatches) -> anyh
     let client = build_client(ctx, &path.alias_or_url).await?;
     let bucket = client.get_bucket(&path.bucket).await?;
     let attachments = read_attachments_or_empty(&bucket, &path.entry).await?;
+    let is_json = ctx.json();
 
     if selected_keys.is_empty() {
-        let mut keys = attachments.keys().cloned().collect::<Vec<String>>();
-        keys.sort();
-        for key in keys {
-            let value = attachments.get(&key).unwrap();
-            output!(ctx, "{}: {}", key, serde_json::to_string(value)?);
+        if is_json {
+            output!(ctx, "{}", serde_json::to_string(&attachments)?);
+        } else {
+            let mut keys = attachments.keys().cloned().collect::<Vec<String>>();
+            keys.sort();
+            for key in keys {
+                let value = attachments.get(&key).unwrap();
+                output!(ctx, "{}: {}", key, serde_json::to_string(value)?);
+            }
         }
         return Ok(());
     }
 
-    for key in selected_keys {
-        let value = attachments.get(&key).ok_or_else(|| {
-            anyhow::anyhow!(
-                "Attachment '{}' not found in '{}/{}/{}'",
-                key,
-                path.alias_or_url,
-                path.bucket,
-                path.entry
-            )
-        })?;
-        output!(ctx, "{}: {}", key, serde_json::to_string(value)?);
+    if is_json {
+        let mut attachments_json = HashMap::new();
+        for key in selected_keys {
+            if let Some(value) = attachments.get(&key) {
+                attachments_json.insert(key, value);
+            }
+        }
+        output!(ctx, "{}", serde_json::to_string(&attachments_json)?);
+    } else {
+        for key in selected_keys {
+            let value = attachments.get(&key).ok_or_else(|| {
+                anyhow::anyhow!(
+                    "Attachment '{}' not found in '{}/{}/{}'",
+                    key,
+                    path.alias_or_url,
+                    path.bucket,
+                    path.entry
+                )
+            })?;
+            output!(ctx, "{}: {}", key, serde_json::to_string(value)?);
+        }
     }
     Ok(())
 }
@@ -62,7 +79,8 @@ pub(super) async fn read_attachment(ctx: &CliContext, args: &ArgMatches) -> anyh
 mod tests {
     use super::*;
     use crate::cmd::attachment::helpers::test_utils::{create_bucket, remove_bucket};
-    use crate::context::tests::context;
+    use crate::context::tests::{context, MockOutput};
+    use crate::context::ContextBuilder;
     use rstest::rstest;
     use serde_json::json;
     use std::collections::HashMap;
@@ -158,5 +176,112 @@ mod tests {
         assert!(err
             .to_string()
             .contains("Attachment 'key' not found in 'local/"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_read_all_attachments_json(context: CliContext) {
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let (bucket_name, bucket) = create_bucket(&ctx, "test-attachment-read-all")
+            .await
+            .unwrap();
+        bucket
+            .write_attachments(
+                "entry-1",
+                HashMap::from([
+                    ("schema".to_string(), json!({"type":"object"})),
+                    ("prompt".to_string(), json!({"role":"system"})),
+                ]),
+            )
+            .await
+            .unwrap();
+
+        let args = read_attachment_cmd()
+            .try_get_matches_from(vec!["read", &format!("local/{}/entry-1", bucket_name)])
+            .unwrap();
+        read_attachment(&ctx, &args).await.unwrap();
+        remove_bucket(&ctx, &bucket_name).await.unwrap();
+
+        let attachments_json: serde_json::Value =
+            serde_json::from_str(&ctx.stdout().history()[0]).unwrap();
+
+        assert_eq!(
+            attachments_json["schema"]["type"],
+            serde_json::json!("object")
+        );
+        assert_eq!(
+            attachments_json["prompt"]["role"],
+            serde_json::json!("system")
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_read_selected_attachments_json(context: CliContext) {
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let (bucket_name, bucket) = create_bucket(&ctx, "test-attachment-read-key")
+            .await
+            .unwrap();
+        bucket
+            .write_attachments(
+                "entry-1",
+                HashMap::from([("schema".to_string(), json!({"type":"object"}))]),
+            )
+            .await
+            .unwrap();
+
+        let args = read_attachment_cmd()
+            .try_get_matches_from(vec![
+                "read",
+                &format!("local/{}/entry-1", bucket_name),
+                "schema",
+            ])
+            .unwrap();
+        read_attachment(&ctx, &args).await.unwrap();
+        remove_bucket(&ctx, &bucket_name).await.unwrap();
+
+        let attachments_json: serde_json::Value =
+            serde_json::from_str(&ctx.stdout().history()[0]).unwrap();
+
+        assert_eq!(
+            attachments_json["schema"]["type"],
+            serde_json::json!("object")
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_read_missing_attachment_json(context: CliContext) {
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let (bucket_name, _) = create_bucket(&ctx, "test-attachment-read-missing")
+            .await
+            .unwrap();
+
+        let args = read_attachment_cmd()
+            .try_get_matches_from(vec![
+                "read",
+                &format!("local/{}/entry-1", bucket_name),
+                "key",
+            ])
+            .unwrap();
+        let _ = read_attachment(&ctx, &args).await;
+        remove_bucket(&ctx, &bucket_name).await.unwrap();
+
+        assert_eq!(&ctx.stdout().history()[0], "{}");
     }
 }
