@@ -7,6 +7,7 @@ use crate::cmd::replica::make_prefix_arg;
 use crate::cmd::RESOURCE_PATH_HELP;
 use crate::context::CliContext;
 use crate::io::reduct::{build_client, parse_url_and_token};
+use crate::io::std::output;
 use crate::parse::widely_used_args::{make_compression_arg, make_entries_arg, make_when_arg};
 use crate::parse::{Resource, ResourcePathParser};
 
@@ -59,6 +60,11 @@ pub(super) async fn update_replica_handler(
     client
         .update_replication(&replication_name, new_settings)
         .await?;
+
+    if ctx.json() {
+        output!(ctx, "{}", "{}");
+    }
+
     Ok(())
 }
 
@@ -116,7 +122,8 @@ fn update_replication_settings(
 mod tests {
     use super::*;
     use crate::cmd::replica::tests::prepare_replication;
-    use crate::context::tests::{bucket, bucket2, context, replica};
+    use crate::context::tests::{bucket, bucket2, context, replica, MockOutput};
+    use crate::context::ContextBuilder;
     use rstest::rstest;
 
     #[rstest]
@@ -422,5 +429,44 @@ mod tests {
                 ..Default::default()
             }
         }
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_update_replica_json(
+        context: CliContext,
+        #[future] replica: String,
+        #[future] bucket: String,
+        #[future] bucket2: String,
+    ) {
+        let test_replica = replica.await;
+        let bucket = bucket.await;
+        let bucket2 = bucket2.await;
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_replication(&ctx, &test_replica, &bucket, &bucket2)
+            .await
+            .unwrap();
+
+        let args = update_replica_cmd()
+            .try_get_matches_from(vec![
+                "update",
+                format!("local/{}", test_replica).as_str(),
+                format!("local/{}", &bucket2).as_str(),
+                "--prefix",
+                "robot-2",
+                "--compression",
+                "zstd",
+            ])
+            .unwrap();
+
+        update_replica_handler(&ctx, &args).await.unwrap();
+
+        assert_eq!(ctx.stdout().history(), vec!["{}"]);
     }
 }
