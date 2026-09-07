@@ -56,6 +56,11 @@ pub(super) async fn show_replica_handler(
 
     let replica = client.get_replication(&replication_name).await?;
 
+    if ctx.json() {
+        output!(ctx, "{}", serde_json::to_string(&replica)?);
+        return Ok(());
+    }
+
     let mut info_cells = vec![
         labeled_cell("Name", replica.info.name.clone()),
         labeled_cell(
@@ -128,8 +133,8 @@ pub(super) async fn show_replica_handler(
 mod tests {
     use super::*;
     use crate::cmd::replica::tests::prepare_replication;
-    use crate::context::tests::{bucket, bucket2, context, replica};
-    use crate::context::CliContext;
+    use crate::context::tests::{bucket, bucket2, context, replica, MockOutput};
+    use crate::context::{CliContext, ContextBuilder};
     use rstest::rstest;
 
     #[rstest]
@@ -205,6 +210,80 @@ mod tests {
         assert_eq!(
             args.err().unwrap().to_string(),
             "error: invalid value 'local' for '<REPLICATION_PATH>'\n\nFor more information, try '--help'.\n"
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_show_replica_json(
+        context: CliContext,
+        #[future] replica: String,
+        #[future] bucket: String,
+        #[future] bucket2: String,
+    ) {
+        let replica = replica.await;
+        let bucket = bucket.await;
+        let bucket2 = bucket2.await;
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_replication(&ctx, &replica, &bucket, &bucket2)
+            .await
+            .unwrap();
+
+        let args = show_replica_cmd()
+            .get_matches_from(vec!["show", format!("local/{}", replica).as_str()]);
+        build_client(&ctx, "local").await.unwrap();
+
+        show_replica_handler(&ctx, &args).await.unwrap();
+
+        let history = &ctx.stdout().history()[0];
+
+        let replica: serde_json::Value = serde_json::from_str(history).unwrap();
+
+        assert_eq!(replica["info"]["name"], serde_json::json!("test_replica"));
+        assert_eq!(replica["info"]["mode"], serde_json::json!("enabled"));
+        assert_eq!(replica["info"]["is_active"], serde_json::json!(true));
+        assert_eq!(replica["info"]["is_provisioned"], serde_json::json!(false));
+        assert_eq!(replica["info"]["pending_records"], serde_json::json!(0));
+
+        assert_eq!(
+            replica["settings"]["src_bucket"],
+            serde_json::json!("test_bucket")
+        );
+        assert_eq!(
+            replica["settings"]["dst_bucket"],
+            serde_json::json!("test_bucket_2")
+        );
+        assert_eq!(
+            replica["settings"]["dst_host"],
+            serde_json::json!("http://localhost:8383")
+        );
+        assert_eq!(replica["settings"]["dst_token"], serde_json::Value::Null);
+        assert_eq!(replica["settings"]["entries"], serde_json::json!([]));
+        assert_eq!(
+            replica["settings"]["dst_prefix"],
+            serde_json::json!("robot-1")
+        );
+        assert_eq!(replica["settings"]["when"], serde_json::Value::Null);
+        assert_eq!(replica["settings"]["mode"], serde_json::json!("enabled"));
+        assert_eq!(
+            replica["settings"]["compression"],
+            serde_json::json!("none")
+        );
+
+        assert_eq!(replica["diagnostics"]["hourly"]["ok"], serde_json::json!(0));
+        assert_eq!(
+            replica["diagnostics"]["hourly"]["errored"],
+            serde_json::json!(0)
+        );
+        assert_eq!(
+            replica["diagnostics"]["hourly"]["errors"],
+            serde_json::json!({})
         );
     }
 }

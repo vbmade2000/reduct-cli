@@ -46,8 +46,11 @@ async fn set_replica_mode(
 
     let client = build_client(ctx, &alias_or_url).await?;
     client.set_replication_mode(&replication_name, mode).await?;
-
-    output!(ctx, "Replication '{}' {}", replication_name, action);
+    if ctx.json() {
+        output!(ctx, "{}", "{}");
+    } else {
+        output!(ctx, "Replication '{}' {}", replication_name, action);
+    }
     Ok(())
 }
 
@@ -148,5 +151,77 @@ mod tests {
             context.stdout().history(),
             vec![format!("Replication '{}' {}", test_replica, action)]
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[case::enable("enable", ReplicationMode::Enabled, "enabled")]
+    #[case::disable("disable", ReplicationMode::Disabled, "disabled")]
+    #[case::pause("pause", ReplicationMode::Paused, "paused")]
+    async fn test_set_replica_mode_json(
+        context: CliContext,
+        #[future] replica: String,
+        #[future] bucket: String,
+        #[future] bucket2: String,
+        #[case] subcommand: &str,
+        #[case] mode: ReplicationMode,
+        #[case] _action: &str,
+    ) {
+        use crate::context::{tests::MockOutput, ContextBuilder};
+
+        let test_replica = replica.await;
+        let bucket = bucket.await;
+        let bucket2 = bucket2.await;
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let client = prepare_replication(&ctx, &test_replica, &bucket, &bucket2)
+            .await
+            .unwrap();
+
+        if let Err(err) = client.set_replication_mode(&test_replica, mode).await {
+            if err.status() == ErrorCode::MethodNotAllowed {
+                eprintln!("Server does not support replication mode endpoint yet.");
+                return;
+            }
+            panic!("{err:?}");
+        }
+
+        match subcommand {
+            "enable" => {
+                let args = enable_replica_cmd()
+                    .try_get_matches_from(vec![
+                        subcommand,
+                        format!("local/{}", test_replica).as_str(),
+                    ])
+                    .unwrap();
+                enable_replica_handler(&ctx, &args).await.unwrap();
+            }
+            "disable" => {
+                let args = disable_replica_cmd()
+                    .try_get_matches_from(vec![
+                        subcommand,
+                        format!("local/{}", test_replica).as_str(),
+                    ])
+                    .unwrap();
+                disable_replica_handler(&ctx, &args).await.unwrap();
+            }
+            "pause" => {
+                let args = pause_replica_cmd()
+                    .try_get_matches_from(vec![
+                        subcommand,
+                        format!("local/{}", test_replica).as_str(),
+                    ])
+                    .unwrap();
+                pause_replica_handler(&ctx, &args).await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+
+        assert_eq!(ctx.stdout().history(), vec!["{}"]);
     }
 }
