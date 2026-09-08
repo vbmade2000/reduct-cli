@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Add `--json` flag to `server` command, [PR-284](https://github.com/reductstore/reduct-cli/pull/284) by @vbmade2000
 - Add `--json` flag to `alias` command, [PR-287](https://github.com/reductstore/reduct-cli/pull/287) by @vbmade2000
 - Add `--json` flag to `replica` command, [PR-288](https://github.com/reductstore/reduct-cli/pull/288) by @vbmade2000
+- Add `--json` flag to `attachment` command, [PR-289](https://github.com/reductstore/reduct-cli/pull/289) by @vbmade2000
 
 ### Changed
 

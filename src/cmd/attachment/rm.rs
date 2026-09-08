@@ -61,6 +61,11 @@ pub(super) async fn rm_attachment(ctx: &CliContext, args: &ArgMatches) -> anyhow
         Err(err) => return Err(err.into()),
     }
 
+    if ctx.json() {
+        output!(ctx, "{}", "{}");
+        return Ok(());
+    }
+
     if remove_all {
         output!(
             ctx,
@@ -87,7 +92,8 @@ mod tests {
     use super::*;
     use crate::cmd::attachment::helpers::read_attachments_or_empty;
     use crate::cmd::attachment::helpers::test_utils::{create_bucket, remove_bucket};
-    use crate::context::tests::context;
+    use crate::context::tests::{context, MockOutput};
+    use crate::context::ContextBuilder;
     use rstest::rstest;
     use serde_json::json;
     use std::collections::HashMap;
@@ -202,5 +208,36 @@ mod tests {
             .unwrap();
         rm_attachment(&context, &args).await.unwrap();
         remove_bucket(&context, &bucket_name).await.unwrap();
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_rm_all_attachments_json(context: CliContext) {
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let (bucket_name, bucket) = create_bucket(&ctx, "test-attachment-rm-all").await.unwrap();
+        bucket
+            .write_attachments(
+                "entry-1",
+                HashMap::from([("schema".to_string(), json!({"type":"object"}))]),
+            )
+            .await
+            .unwrap();
+
+        let args = rm_attachment_cmd()
+            .try_get_matches_from(vec![
+                "rm",
+                &format!("local/{}/entry-1", bucket_name),
+                "--all",
+            ])
+            .unwrap();
+        rm_attachment(&ctx, &args).await.unwrap();
+
+        remove_bucket(&ctx, &bucket_name).await.unwrap();
+        assert_eq!(&ctx.stdout().history()[0], "{}");
     }
 }
