@@ -79,16 +79,29 @@ pub(super) async fn ls_lifecycle(
     let client = crate::io::reduct::build_client(ctx, alias_or_url).await?;
 
     let print_list = |ctx: &crate::context::CliContext, lifecycle_list: Vec<LifecycleInfo>| {
-        for lifecycle in lifecycle_list {
-            output!(ctx, "{}", lifecycle.name);
+        let lifecycles = lifecycle_list
+            .iter()
+            .map(|lifecycle| lifecycle.name.as_str())
+            .collect::<Vec<_>>();
+
+        if ctx.json() {
+            output!(ctx, "{}", serde_json::to_string(&lifecycles).unwrap());
+        } else {
+            for lifecycle in lifecycles {
+                output!(ctx, "{}", lifecycle);
+            }
         }
     };
 
     let print_full_list = |ctx: &crate::context::CliContext, lifecycle_list: Vec<LifecycleInfo>| {
-        let table = Table::new(lifecycle_list.into_iter().map(LifecycleTable::from))
-            .with(Style::markdown())
-            .to_string();
-        output!(ctx, "{}", table);
+        if ctx.json() {
+            output!(ctx, "{}", serde_json::to_string(&lifecycle_list).unwrap());
+        } else {
+            let table = Table::new(lifecycle_list.into_iter().map(LifecycleTable::from))
+                .with(Style::markdown())
+                .to_string();
+            output!(ctx, "{}", table);
+        }
     };
 
     if args.get_flag("full") {
@@ -104,8 +117,8 @@ pub(super) async fn ls_lifecycle(
 mod tests {
     use super::*;
     use crate::cmd::lifecycle::tests::{prepare_lifecycle, unique_name};
-    use crate::context::tests::context;
-    use crate::context::CliContext;
+    use crate::context::tests::{context, MockOutput};
+    use crate::context::{CliContext, ContextBuilder};
     use chrono::Utc;
     use reduct_rs::LifecycleMode;
     use rstest::rstest;
@@ -165,5 +178,61 @@ mod tests {
         assert!(output[0].contains(&lifecycle));
         assert!(output[0].contains("Delete"));
         assert!(output[0].contains("▶ Enabled"));
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_list_lifecycles_json(context: CliContext) {
+        let lifecycle = unique_name("test-lifecycle");
+        let bucket = unique_name("test-bucket");
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_lifecycle(&ctx, &lifecycle, &bucket).await.unwrap();
+
+        let args = ls_lifecycle_cmd()
+            .try_get_matches_from(vec!["ls", "local"])
+            .unwrap();
+
+        ls_lifecycle(&ctx, &args).await.unwrap();
+
+        let history = &ctx.stdout().history()[0];
+        let lifecycles: Vec<String> = serde_json::from_str(history).unwrap();
+        assert_eq!(lifecycles.contains(&lifecycle), true);
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_list_lifecycles_full_json(context: CliContext) {
+        let lifecycle = unique_name("test-lifecycle");
+        let bucket = unique_name("test-bucket");
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_lifecycle(&ctx, &lifecycle, &bucket).await.unwrap();
+
+        let args = ls_lifecycle_cmd()
+            .try_get_matches_from(vec!["ls", "local", "--full"])
+            .unwrap();
+
+        ls_lifecycle(&ctx, &args).await.unwrap();
+        let history = &ctx.stdout().history()[0];
+
+        let lifecycles: Vec<serde_json::Value> = serde_json::from_str(history).unwrap();
+
+        assert_eq!(lifecycles[0]["name"], serde_json::json!(lifecycle));
+        assert_eq!(lifecycles[0]["is_provisioned"], serde_json::json!(false));
+        assert_eq!(lifecycles[0]["is_running"], serde_json::json!(true));
+        assert_eq!(lifecycles[0]["type"], serde_json::json!("delete"));
+        assert_eq!(lifecycles[0]["mode"], serde_json::json!("enabled"));
+        assert_eq!(lifecycles[0]["last_run"], serde_json::Value::Null);
     }
 }
