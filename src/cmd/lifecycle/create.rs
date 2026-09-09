@@ -5,6 +5,7 @@
 
 use crate::cmd::RESOURCE_PATH_HELP;
 use crate::io::reduct::build_client;
+use crate::io::std::output;
 use crate::parse::widely_used_args::{make_entries_arg, make_when_arg};
 use crate::parse::{Resource, ResourcePathParser};
 use clap::{Arg, Command};
@@ -109,6 +110,11 @@ pub(super) async fn create_lifecycle(
         .set_settings(settings)
         .send()
         .await?;
+
+    if ctx.json() {
+        output!(ctx, "{}", "{}");
+    }
+
     Ok(())
 }
 
@@ -116,7 +122,8 @@ pub(super) async fn create_lifecycle(
 mod tests {
     use super::*;
     use crate::cmd::lifecycle::tests::unique_name;
-    use crate::context::tests::context;
+    use crate::context::tests::{context, MockOutput};
+    use crate::context::ContextBuilder;
     use rstest::rstest;
     use serde_json::json;
 
@@ -197,5 +204,40 @@ mod tests {
             "1h",
         ]);
         assert!(args.is_err());
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_create_lifecycle_json(context: crate::context::CliContext) {
+        let test_lifecycle = unique_name("test-lifecycle");
+        let bucket = unique_name("test-bucket");
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let client = build_client(&ctx, "local").await.unwrap();
+        client.create_bucket(&bucket).send().await.unwrap();
+
+        let args = create_lifecycle_cmd().get_matches_from(vec![
+            "create",
+            format!("local/{}", test_lifecycle).as_str(),
+            bucket.as_str(),
+            "--older-than",
+            "1h",
+            "--interval",
+            "10m",
+            "--processing-interval",
+            "6h",
+            "--entries",
+            "entry1",
+            "entry2",
+            "--when",
+            r#"{"&label": {"$gt": 10}}"#,
+        ]);
+        create_lifecycle(&ctx, &args).await.unwrap();
+        assert_eq!(ctx.stdout().history(), vec!["{}"]);
     }
 }
