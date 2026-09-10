@@ -35,6 +35,11 @@ pub(super) async fn show_lifecycle_handler(
 
     let lifecycle = client.get_lifecycle(&lifecycle_name).await?;
 
+    if ctx.json() {
+        output!(ctx, "{}", serde_json::to_string(&lifecycle)?);
+        return Ok(());
+    }
+
     let mut info_cells = vec![
         labeled_cell("Name", lifecycle.info.name.clone()),
         labeled_cell(
@@ -89,8 +94,8 @@ pub(super) async fn show_lifecycle_handler(
 mod tests {
     use super::*;
     use crate::cmd::lifecycle::tests::{prepare_lifecycle, unique_name};
-    use crate::context::tests::context;
-    use crate::context::CliContext;
+    use crate::context::tests::{context, MockOutput};
+    use crate::context::{CliContext, ContextBuilder};
     use rstest::rstest;
 
     #[rstest]
@@ -149,6 +154,68 @@ mod tests {
         assert_eq!(
             args.err().unwrap().to_string(),
             "error: invalid value 'local' for '<LIFECYCLE_PATH>'\n\nFor more information, try '--help'.\n"
+        );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_show_lifecycle_json(context: CliContext) {
+        let lifecycle = unique_name("test-lifecycle");
+        let bucket = unique_name("test-bucket");
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_lifecycle(&ctx, &lifecycle, &bucket).await.unwrap();
+
+        let args = show_lifecycle_cmd()
+            .get_matches_from(vec!["show", format!("local/{}", lifecycle).as_str()]);
+        show_lifecycle_handler(&ctx, &args).await.unwrap();
+
+        let output = &ctx.stdout().history()[0];
+        let lifecycle_json: serde_json::Value = serde_json::from_str(output).unwrap();
+
+        assert_eq!(lifecycle_json["info"]["name"], serde_json::json!(lifecycle));
+        assert_eq!(
+            lifecycle_json["info"]["is_provisioned"],
+            serde_json::json!(false)
+        );
+        assert_eq!(
+            lifecycle_json["info"]["is_running"],
+            serde_json::json!(true)
+        );
+        assert_eq!(lifecycle_json["info"]["type"], serde_json::json!("delete"));
+        assert_eq!(lifecycle_json["info"]["mode"], serde_json::json!("enabled"));
+        assert_eq!(lifecycle_json["info"]["last_run"], serde_json::Value::Null);
+
+        assert_eq!(
+            lifecycle_json["settings"]["type"],
+            serde_json::json!("delete")
+        );
+        assert_eq!(
+            lifecycle_json["settings"]["bucket"],
+            serde_json::json!(bucket)
+        );
+        assert_eq!(lifecycle_json["settings"]["entries"], serde_json::json!([]));
+        assert_eq!(
+            lifecycle_json["settings"]["older_than"],
+            serde_json::json!("1h")
+        );
+        assert_eq!(
+            lifecycle_json["settings"]["interval"],
+            serde_json::json!("10m")
+        );
+        assert_eq!(lifecycle_json["settings"]["when"], serde_json::Value::Null);
+        assert_eq!(
+            lifecycle_json["settings"]["processing_interval"],
+            serde_json::Value::Null
+        );
+        assert_eq!(
+            lifecycle_json["settings"]["mode"],
+            serde_json::json!("enabled")
         );
     }
 }

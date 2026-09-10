@@ -55,9 +55,17 @@ pub(super) async fn rm_lifecycle_handler(
     if confirm {
         let client = build_client(ctx, &alias_or_url).await?;
         client.delete_lifecycle(&lifecycle_name).await?;
-        output!(ctx, "Lifecycle '{}' deleted", lifecycle_name);
+        if ctx.json() {
+            output!(ctx, "{}", "{}");
+        } else {
+            output!(ctx, "Lifecycle '{}' deleted", lifecycle_name);
+        }
     } else {
-        output!(ctx, "Lifecycle '{}' not deleted", lifecycle_name);
+        if ctx.json() {
+            output!(ctx, "{}", "{}");
+        } else {
+            output!(ctx, "Lifecycle '{}' not deleted", lifecycle_name);
+        }
     }
 
     Ok(())
@@ -67,8 +75,8 @@ pub(super) async fn rm_lifecycle_handler(
 mod tests {
     use crate::cmd::lifecycle::rm::{rm_lifecycle_cmd, rm_lifecycle_handler};
     use crate::cmd::lifecycle::tests::{prepare_lifecycle, unique_name};
-    use crate::context::tests::context;
-    use crate::context::CliContext;
+    use crate::context::tests::{context, MockOutput};
+    use crate::context::{CliContext, ContextBuilder};
     use rstest::rstest;
 
     #[rstest]
@@ -95,5 +103,27 @@ mod tests {
                 .to_string(),
             format!("[NotFound] Lifecycle '{}' does not exist", lifecycle)
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_rm_lifecycle_json(context: CliContext) {
+        let lifecycle = unique_name("test-lifecycle");
+        let bucket = unique_name("test-bucket");
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_lifecycle(&ctx, &lifecycle, &bucket).await.unwrap();
+
+        let args = rm_lifecycle_cmd()
+            .try_get_matches_from(vec!["rm", format!("local/{}", lifecycle).as_str(), "--yes"])
+            .unwrap();
+        rm_lifecycle_handler(&ctx, &args).await.unwrap();
+
+        assert_eq!(ctx.stdout().history(), vec!["{}"]);
     }
 }

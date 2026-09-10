@@ -47,7 +47,12 @@ async fn set_lifecycle_mode(
     let client = build_client(ctx, &alias_or_url).await?;
     client.set_lifecycle_mode(&lifecycle_name, mode).await?;
 
-    output!(ctx, "Lifecycle '{}' {}", lifecycle_name, action);
+    if ctx.json() {
+        output!(ctx, "{}", "{}");
+    } else {
+        output!(ctx, "Lifecycle '{}' {}", lifecycle_name, action);
+    }
+
     Ok(())
 }
 
@@ -135,5 +140,60 @@ mod tests {
             context.stdout().history(),
             vec![format!("Lifecycle '{}' {}", test_lifecycle, action)]
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    #[case::enable("enable")]
+    #[case::disable("disable")]
+    #[case::dry_run("dry-run")]
+    async fn test_set_lifecycle_mode_json(context: CliContext, #[case] subcommand: &str) {
+        use crate::context::{tests::MockOutput, ContextBuilder};
+
+        let test_lifecycle = unique_name("test-lifecycle");
+        let bucket = unique_name("test-bucket");
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        prepare_lifecycle(&ctx, &test_lifecycle, &bucket)
+            .await
+            .unwrap();
+
+        match subcommand {
+            "enable" => {
+                let args = enable_lifecycle_cmd()
+                    .try_get_matches_from(vec![
+                        subcommand,
+                        format!("local/{}", test_lifecycle).as_str(),
+                    ])
+                    .unwrap();
+                enable_lifecycle_handler(&ctx, &args).await.unwrap();
+            }
+            "disable" => {
+                let args = disable_lifecycle_cmd()
+                    .try_get_matches_from(vec![
+                        subcommand,
+                        format!("local/{}", test_lifecycle).as_str(),
+                    ])
+                    .unwrap();
+                disable_lifecycle_handler(&ctx, &args).await.unwrap();
+            }
+            "dry-run" => {
+                let args = dry_run_lifecycle_cmd()
+                    .try_get_matches_from(vec![
+                        subcommand,
+                        format!("local/{}", test_lifecycle).as_str(),
+                    ])
+                    .unwrap();
+                dry_run_lifecycle_handler(&ctx, &args).await.unwrap();
+            }
+            _ => unreachable!(),
+        }
+
+        assert_eq!(ctx.stdout().history(), vec!["{}"]);
     }
 }
