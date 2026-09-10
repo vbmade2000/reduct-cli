@@ -5,6 +5,7 @@
 
 use crate::cmd::RESOURCE_PATH_HELP;
 use crate::io::reduct::build_client;
+use crate::io::std::output;
 use crate::parse::widely_used_args::{make_entries_arg, make_when_arg};
 use crate::parse::{Resource, ResourcePathParser};
 use clap::{Arg, Command};
@@ -104,6 +105,10 @@ pub(super) async fn update_lifecycle_handler(
 
     client.update_lifecycle(&lifecycle_name, settings).await?;
 
+    if ctx.json() {
+        output!(ctx, "{}", "{}");
+    }
+
     Ok(())
 }
 
@@ -111,7 +116,8 @@ pub(super) async fn update_lifecycle_handler(
 mod tests {
     use super::*;
     use crate::cmd::lifecycle::tests::{prepare_lifecycle, unique_name};
-    use crate::context::tests::context;
+    use crate::context::tests::{context, MockOutput};
+    use crate::context::ContextBuilder;
     use rstest::rstest;
     use serde_json::json;
 
@@ -209,5 +215,45 @@ mod tests {
             args.err().unwrap().to_string(),
             "error: invalid value 'local' for '<LIFECYCLE_PATH>'\n\nFor more information, try '--help'.\n"
         );
+    }
+
+    #[rstest]
+    #[tokio::test]
+    async fn test_update_lifecycle_json(context: crate::context::CliContext) {
+        let test_lifecycle = unique_name("test-lifecycle");
+        let bucket = unique_name("test-bucket");
+        let bucket2 = unique_name("test-bucket");
+
+        let ctx = ContextBuilder::new()
+            .config_path(context.config_path())
+            .json(Some(true))
+            .output(Box::new(MockOutput::new()))
+            .build();
+
+        let client = prepare_lifecycle(&ctx, &test_lifecycle, &bucket)
+            .await
+            .unwrap();
+        client.create_bucket(&bucket2).send().await.unwrap();
+
+        let args = update_lifecycle_cmd().get_matches_from(vec![
+            "update",
+            format!("local/{}", test_lifecycle).as_str(),
+            "--bucket",
+            &bucket2,
+            "--older-than",
+            "2h",
+            "--interval",
+            "30m",
+            "--processing-interval",
+            "12h",
+            "--entries",
+            "entry1",
+            "entry2",
+            "--when",
+            r#"{"&label": {"$eq": 1}}"#,
+        ]);
+        update_lifecycle_handler(&ctx, &args).await.unwrap();
+
+        assert_eq!(ctx.stdout().history(), vec!["{}"]);
     }
 }
