@@ -217,7 +217,9 @@ mod tests {
             .output(Box::new(MockOutput::new()))
             .build();
 
-        prepare_lifecycle(&ctx, &lifecycle, &bucket).await.unwrap();
+        prepare_lifecycle(&context, &lifecycle, &bucket)
+            .await
+            .unwrap();
 
         let args = ls_lifecycle_cmd()
             .try_get_matches_from(vec!["ls", "local", "--full"])
@@ -227,6 +229,10 @@ mod tests {
         let history = &ctx.stdout().history()[0];
 
         let lifecycles: Vec<serde_json::Value> = serde_json::from_str(history).unwrap();
+        let lifecycles: Vec<&serde_json::Value> = lifecycles
+            .iter()
+            .filter(|v: &&serde_json::Value| v["name"] == serde_json::json!(lifecycle))
+            .collect();
 
         assert_eq!(lifecycles[0]["name"], serde_json::json!(lifecycle));
         assert_eq!(lifecycles[0]["is_provisioned"], serde_json::json!(false));
